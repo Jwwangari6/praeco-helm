@@ -4,11 +4,10 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   release:
@@ -20,63 +19,22 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get chart version
-        id: chart_version
+      - name: Force chart detection
         run: |
-          # Extract version from Chart.yaml
-          VERSION=$(grep ^version Chart.yaml | cut -d' ' -f2 | tr -d '"')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Chart version: $VERSION"
-
-      - name: Check if version exists
-        id: check_version
-        run: |
-          CHART_VERSION="${{ steps.chart_version.outputs.version }}"
+          # Touch a file in the chart directory to force a change
+          # But don't commit it - this is just for the action's detection
+          echo "# Force trigger" >> .force-release
+          git add .force-release
+          git commit -m "Force chart release" || true
           
-          # Check local tags
-          if git tag -l | grep -q "^${CHART_VERSION}$"; then
-            echo "Tag ${CHART_VERSION} already exists locally"
-            echo "exists=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Check remote tags
-          if git ls-remote --tags origin | grep -q "refs/tags/${CHART_VERSION}$"; then
-            echo "Tag ${CHART_VERSION} already exists remotely"
-            echo "exists=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Check GitHub Releases
-          RELEASE_CHECK=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${CHART_VERSION}")
-          
-          if echo "$RELEASE_CHECK" | grep -q '"message": "Not Found"'; then
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Version ${CHART_VERSION} is new - ready to release!"
-          else
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Release ${CHART_VERSION} already exists"
-          fi
-
       - name: Configure Git
-        if: steps.check_version.outputs.exists == 'false'
         run: |
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
       - name: Run chart-releaser
-        if: steps.check_version.outputs.exists == 'false'
         uses: helm/chart-releaser-action@v1.5.0
         with:
           charts_dir: .
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: Skip message
-        if: steps.check_version.outputs.exists == 'true'
-        run: |
-          echo "⚠️ Version ${{ steps.chart_version.outputs.version }} already exists!"
-          echo "Please bump the version in Chart.yaml to trigger a new release."
-          echo "Current version: ${{ steps.chart_version.outputs.version }}"
-          exit 1  # This will fail the workflow to alert you
