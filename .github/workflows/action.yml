@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,20 +20,24 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git
+      - name: Update dependencies
         run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+          # Update helm dependencies
+          helm dependency update
+          echo "Dependencies downloaded:"
+          ls -la charts/ || echo "No charts directory"
 
-      - name: Package chart manually
+      - name: Package chart
         run: |
-          # Package the chart
+          # Create packages directory
+          mkdir -p .cr-release-packages
+          
+          # Package with dependencies
           helm package . -d .cr-release-packages
           echo "Packaged chart:"
           ls -la .cr-release-packages/
 
       - name: Create GitHub Release
-        id: create_release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -41,7 +45,7 @@ jobs:
           CHART_NAME=$(grep ^name Chart.yaml | cut -d' ' -f2)
           PACKAGE=".cr-release-packages/${CHART_NAME}-${CHART_VERSION}.tgz"
           
-          # Create release
+          # Create release with the packaged chart
           gh release create "${CHART_VERSION}" \
             "$PACKAGE" \
             --title "Release ${CHART_VERSION}" \
@@ -49,7 +53,16 @@ jobs:
 
       - name: Update gh-pages branch
         run: |
-          # Checkout gh-pages branch or create it
+          # Setup git
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+          
+          # Get the package info
+          CHART_VERSION=$(grep ^version Chart.yaml | cut -d' ' -f2)
+          CHART_NAME=$(grep ^name Chart.yaml | cut -d' ' -f2)
+          PACKAGE="${CHART_NAME}-${CHART_VERSION}.tgz"
+          
+          # Clone or create gh-pages branch
           git fetch origin gh-pages 2>/dev/null || true
           if git rev-parse --verify gh-pages; then
             git checkout gh-pages
@@ -58,12 +71,7 @@ jobs:
             git rm -rf .
           fi
           
-          # Copy new package and update index
-          CHART_VERSION=$(grep ^version ../Chart.yaml | cut -d' ' -f2)
-          CHART_NAME=$(grep ^name ../Chart.yaml | cut -d' ' -f2)
-          PACKAGE="${CHART_NAME}-${CHART_VERSION}.tgz"
-          
-          # Copy the package from the main branch
+          # Copy the package
           cp "../.cr-release-packages/${PACKAGE}" .
           
           # Update index.yaml
@@ -71,7 +79,5 @@ jobs:
           
           # Commit and push
           git add .
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
-          git commit -m "Release ${CHART_VERSION}" || echo "No changes to commit"
+          git commit -m "Release ${CHART_VERSION}" || echo "No changes"
           git push origin gh-pages --force
