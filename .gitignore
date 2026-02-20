@@ -34,7 +34,7 @@ Session.vim
 # Chard archive
 *.tgz
 # Chart dependencies
-**/charts/*.tgz
+#**/charts/*.tgz
 
 .history
 
