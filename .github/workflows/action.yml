@@ -4,8 +4,11 @@ on:
   push:
     branches:
       - master
-  # Add manual trigger for testing
-  workflow_dispatch:
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+  packages: write
 
 jobs:
   release:
@@ -15,15 +18,30 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          # Important: This ensures we get all tags including from original
+          fetch-tags: true
 
-      - name: Debug - List files
+      - name: Show current state
         run: |
-          echo "Current directory:"
-          pwd
-          echo "Directory structure:"
-          ls -la
-          echo "Looking for Chart.yaml files:"
-          find . -name "Chart.yaml" -type f
+          echo "Current version in Chart.yaml:"
+          grep ^version Chart.yaml
+          echo "Tags in repo:"
+          git tag -l | grep -E "$(grep ^version Chart.yaml | cut -d' ' -f2)"
+          echo "Releases on GitHub:"
+          curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" | jq -r '.[].tag_name'
+
+      - name: Force version check
+        id: check-version
+        run: |
+          CHART_VERSION=$(grep ^version Chart.yaml | cut -d' ' -f2)
+          echo "chart_version=$CHART_VERSION" >> $GITHUB_OUTPUT
+          
+          # Check if this version already exists as a tag
+          if git tag -l | grep -q "$CHART_VERSION"; then
+            echo "Version $CHART_VERSION already exists as a tag!"
+            echo "Please bump the version in Chart.yaml"
+            exit 1
+          fi
 
       - name: Configure Git
         run: |
@@ -34,5 +52,6 @@ jobs:
         uses: helm/chart-releaser-action@v1.5.0
         with:
           charts_dir: .
+          # Force release even if it might exist upstream
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
