@@ -4,10 +4,11 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:
+  workflow_dispatch:  # Allow manual trigger
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -19,22 +20,58 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Force chart detection
-        run: |
-          # Touch a file in the chart directory to force a change
-          # But don't commit it - this is just for the action's detection
-          echo "# Force trigger" >> .force-release
-          git add .force-release
-          git commit -m "Force chart release" || true
-          
       - name: Configure Git
         run: |
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
-      - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.5.0
-        with:
-          charts_dir: .
+      - name: Package chart manually
+        run: |
+          # Package the chart
+          helm package . -d .cr-release-packages
+          echo "Packaged chart:"
+          ls -la .cr-release-packages/
+
+      - name: Create GitHub Release
+        id: create_release
         env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CHART_VERSION=$(grep ^version Chart.yaml | cut -d' ' -f2)
+          CHART_NAME=$(grep ^name Chart.yaml | cut -d' ' -f2)
+          PACKAGE=".cr-release-packages/${CHART_NAME}-${CHART_VERSION}.tgz"
+          
+          # Create release
+          gh release create "${CHART_VERSION}" \
+            "$PACKAGE" \
+            --title "Release ${CHART_VERSION}" \
+            --notes "Release of ${CHART_NAME} ${CHART_VERSION}"
+
+      - name: Update gh-pages branch
+        run: |
+          # Checkout gh-pages branch or create it
+          git fetch origin gh-pages 2>/dev/null || true
+          if git rev-parse --verify gh-pages; then
+            git checkout gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rf .
+          fi
+          
+          # Copy new package and update index
+          CHART_VERSION=$(grep ^version ../Chart.yaml | cut -d' ' -f2)
+          CHART_NAME=$(grep ^name ../Chart.yaml | cut -d' ' -f2)
+          PACKAGE="${CHART_NAME}-${CHART_VERSION}.tgz"
+          
+          # Copy the package from the main branch
+          cp "../.cr-release-packages/${PACKAGE}" .
+          
+          # Update index.yaml
+          helm repo index . --url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          
+          # Commit and push
+          git add .
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+          git commit -m "Release ${CHART_VERSION}" || echo "No changes to commit"
+          git push origin gh-pages --force
